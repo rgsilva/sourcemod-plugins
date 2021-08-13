@@ -21,6 +21,10 @@ public OnPluginStart()
 }
 
 public Action Cmd_PlayerStats(int client, int args) {
+  if (client) {
+    return Plugin_Handled;
+  }
+
   PrintToConsole(client, "-- Game stats --");
 
   for (new i = 1; i <= MaxClients; i++) {
