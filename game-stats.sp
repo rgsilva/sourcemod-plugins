@@ -1,30 +1,71 @@
 #include <sourcemod>
 #include <sdktools>
 #include <cstrike>
+#include <files>
 
 #define PLUGIN_AUTHOR	"rgsilva"
-#define PLUGIN_VERSION	"1.1"
+#define PLUGIN_VERSION	"1.3"
 #pragma semicolon 1
+
+#define MAX_PASSWORD_LENGTH 32
+#define PASSWORD_FILE "plugins/game-stats.pass"
+
+new String:pluginPassword[MAX_PASSWORD_LENGTH];
 
 public Plugin:myinfo =
 {
 	name = "GameStats",
 	author = PLUGIN_AUTHOR,
-	description = "Provides a command to get detailed game information",
+	description = "Provides a password-protected command to get detailed game information",
 	version = PLUGIN_VERSION,
 	url = "https://github.com/rgsilva/sourcemod-plugins"
 };
 
+
 public OnPluginStart()
 {
-	RegConsoleCmd("sm_gamestats", Cmd_PlayerStats);
+  LoadPasswordFromFile();
+  RegConsoleCmd("sm_gamestats", Cmd_GameStats);
 }
 
-public Action Cmd_PlayerStats(int client, int args) {
-  if (client) {
+void LoadPasswordFromFile() {
+  new String:passFilePath[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, passFilePath, sizeof(passFilePath), PASSWORD_FILE);
+
+  File passFile = OpenFile(passFilePath, "r");
+  if (passFile) {
+    passFile.ReadLine(pluginPassword, sizeof(pluginPassword));
+    TrimString(pluginPassword);
+    passFile.Close();
+  } else {
+    strcopy(pluginPassword, MAX_PASSWORD_LENGTH, "");
+  }
+}
+
+public Action Cmd_GameStats(int client, int args) {
+  if (!IsPluginConfigured()) {
+    ReplyToCommand(client, "[SM] Plugin is not configured: the password file (%s) is missing!", PASSWORD_FILE);
     return Plugin_Handled;
   }
 
+  if (args != 1) {
+    ReplyToCommand(client, "[SM] Usage: sm_gamestats <password>");
+    return Plugin_Handled;
+  }
+
+  new String:password[MAX_NAME_LENGTH];
+  GetCmdArg(1, password, sizeof(password));
+  if (!IsPasswordCorrect(password)) {
+    ReplyToCommand(client, "[SM] Nice try, but that's the wrong password.");
+    return Plugin_Handled;
+  }
+
+  PrintGameStats(client);
+
+  return Plugin_Handled;
+}
+
+void PrintGameStats(int client) {
   PrintToConsole(client, "-- Game stats --");
 
   for (new i = 1; i <= MaxClients; i++) {
@@ -62,8 +103,14 @@ public Action Cmd_PlayerStats(int client, int args) {
   int ct_score = CS_GetTeamScore(CS_TEAM_CT);
   int t_score = CS_GetTeamScore(CS_TEAM_T);
 
-  PrintToConsole(client, "Score: CT: %d, TR: %d", ct_score, t_score);
+  PrintToConsole(client, "Score: %d, %d", ct_score, t_score);
   PrintToConsole(client, "----");
+}
 
-  return Plugin_Handled;
+bool IsPluginConfigured() {
+  return !StrEqual(pluginPassword, "");
+}
+
+bool IsPasswordCorrect(char[] password) {
+  return StrEqual(password, pluginPassword);
 }
