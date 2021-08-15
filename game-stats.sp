@@ -4,7 +4,7 @@
 #include <files>
 
 #define PLUGIN_AUTHOR	"rgsilva"
-#define PLUGIN_VERSION	"1.3"
+#define PLUGIN_VERSION	"1.4"
 #pragma semicolon 1
 
 #define MAX_PASSWORD_LENGTH 32
@@ -77,12 +77,14 @@ void PrintGameStats(int client) {
         int deaths = GetEntProp(i, Prop_Data, "m_iDeaths");
         int money = GetEntProp(i, Prop_Send, "m_iAccount");
 
-        // Get health, but only if the player is alive. Otherwise it's zero.
-        int health;
+        // Get health, armor and helmet, but only if the player is alive.
+        int health = 0;
+        int armor = 0;
+        bool has_helmet = false;
         if (IsPlayerAlive(i)) {
-          health = GetEntProp(i, Prop_Send, "m_iHealth");
-        } else {
-          health = 0;
+          health = GetClientHealth(i);
+          armor = GetClientArmor(i);
+          has_helmet = GetEntProp(i, Prop_Send, "m_bHasHelmet");
         }
 
         // Get the player name.
@@ -95,7 +97,7 @@ void PrintGameStats(int client) {
         // Check if the player has a defuse kit.        
         bool has_defuse = (GetEntProp(i, Prop_Send, "m_bHasDefuser"));
 
-        PrintToConsole(client, "Player: %s, %d, %d, %d, %d, %d, %d, %d", name, team, frags, deaths, money, health, has_bomb, has_defuse);
+        PrintToConsole(client, "Player: %s, %d, %d, %d, %d, %d, %d, %d, %d, %d", name, team, frags, deaths, money, health, armor, has_helmet, has_bomb, has_defuse);
       }
     }
   }
