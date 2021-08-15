@@ -3,7 +3,7 @@
 #include <cstrike>
 
 #define PLUGIN_AUTHOR	"rgsilva"
-#define PLUGIN_VERSION	"1.0"
+#define PLUGIN_VERSION	"1.1"
 #pragma semicolon 1
 
 public Plugin:myinfo =
@@ -31,10 +31,12 @@ public Action Cmd_PlayerStats(int client, int args) {
     if (IsClientInGame(i) && !(IsClientSourceTV(i))) {
       int team = GetClientTeam(i);
       if (team == CS_TEAM_CT || team == CS_TEAM_T) {
+        // Get frags, deaths and money.
         int frags = GetEntProp(i, Prop_Data, "m_iFrags");
         int deaths = GetEntProp(i, Prop_Data, "m_iDeaths");
         int money = GetEntProp(i, Prop_Send, "m_iAccount");
 
+        // Get health, but only if the player is alive. Otherwise it's zero.
         int health;
         if (IsPlayerAlive(i)) {
           health = GetEntProp(i, Prop_Send, "m_iHealth");
@@ -42,10 +44,17 @@ public Action Cmd_PlayerStats(int client, int args) {
           health = 0;
         }
 
+        // Get the player name.
         new String:name[MAX_NAME_LENGTH];
         GetClientName(i, name, sizeof(name));
 
-        PrintToConsole(client, "Player: %s, T: %d, K: %d, D: %d, M: %d, H: %d", name, team, frags, deaths, money, health);
+        // Check if the player has the bomb.
+        bool has_bomb = (GetPlayerWeaponSlot(i, CS_SLOT_C4) != -1);
+
+        // Check if the player has a defuse kit.        
+        bool has_defuse = (GetEntProp(i, Prop_Send, "m_bHasDefuser"));
+
+        PrintToConsole(client, "Player: %s, %d, %d, %d, %d, %d, %d, %d", name, team, frags, deaths, money, health, has_bomb, has_defuse);
       }
     }
   }
