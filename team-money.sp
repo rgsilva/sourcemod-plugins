@@ -4,7 +4,7 @@
 #include <halflife>
 
 #define PLUGIN_AUTHOR	"rgsilva"
-#define PLUGIN_VERSION	"1.0"
+#define PLUGIN_VERSION	"1.1"
 #pragma semicolon 1
 
 #define MAX_BUFFER_SIZE 1024
@@ -19,18 +19,33 @@ public Plugin:myinfo =
 };
 
 Handle updateTimer = INVALID_HANDLE;
+new Handle:cvarPluginEnabled;
+new bool:pluginEnabled;
 
 public OnPluginStart()
 {
+    pluginEnabled = true;
+    cvarPluginEnabled = CreateConVar("sm_teammoney", "1", "Show team's money during freezetime? 1 = true, 0 = false", _, true, 0.0, true, 1.0);
+    HookConVarChange(cvarPluginEnabled, OnConVarChanged);
+
     HookEvent("round_start", OnRoundStart);
     HookEvent("round_freeze_end", OnFreezeEnd);
 }
 
+public OnConVarChanged(Handle:convar, const String:oldValue[], const String:newValue[]) {
+    if (convar == cvarPluginEnabled) {
+        pluginEnabled = GetConVarBool(cvarPluginEnabled);
+    }
+}
+
 public void OnRoundStart(Event event, const char[] name, bool dontBroadcast) {
     if (updateTimer != INVALID_HANDLE) {
-        CloseHandle(updateTimer);        
+        CloseHandle(updateTimer);
     }
-    updateTimer = CreateTimer(0.25, OnTimerTrigger, _, TIMER_REPEAT);
+
+    if (pluginEnabled) {
+        updateTimer = CreateTimer(0.25, OnTimerTrigger, _, TIMER_REPEAT);
+    }
 }
 
 public Action OnTimerTrigger(Handle timer) {
@@ -39,8 +54,12 @@ public Action OnTimerTrigger(Handle timer) {
 }
 
 public void OnFreezeEnd(Event event, const char[] name, bool dontBroadcast) {
-    CloseHandle(updateTimer);
-    updateTimer = INVALID_HANDLE;
+    if (updateTimer != INVALID_HANDLE) {
+        CloseHandle(updateTimer);
+        updateTimer = INVALID_HANDLE;
+
+        ClearTeamMoney();
+    }
 }
 
 void SendTeamMoneyToClients() {
@@ -58,6 +77,14 @@ void SendTeamMoneyToClients() {
             } else if (client_team == CS_TEAM_CT) {
                 SendMessage(i, counterTerroristMoney);
             }
+        }
+    }
+}
+
+void ClearTeamMoney() {
+    for (new i = 1; i <= MaxClients; i++) {
+        if (IsClientInGame(i) && !(IsClientSourceTV(i))) {
+            SendMessage(i, "");
         }
     }
 }
