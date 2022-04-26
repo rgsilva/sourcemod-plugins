@@ -18,3 +18,9 @@ Usage: `sm_nobombpoints <1|0>` (1 enables this plugin (default), 0 disables it)
 This plugin will provide you a way of seeing your fellow teammates current money during freezetime. This is useful for coordinating purchases.
 
 Usage: `sm_teammoney <1|0>` (1 enables this plugin (default), 0 disables it)
+
+## Championship
+
+A custom championship mode with normal and overtime rounds.
+
+Usage: `start_championship <normal rounds> <overtime rounds> <normal start money> <overtime start money>`
