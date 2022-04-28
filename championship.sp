@@ -3,14 +3,15 @@
 #include <cstrike>
 
 #define PLUGIN_AUTHOR  "rgsilva"
-#define PLUGIN_VERSION "1.0"
+#define PLUGIN_VERSION "1.1"
 #pragma semicolon 1
 
-#define MAX_ARG_LENGTH 4
+#define MAX_ARG_LENGTH 32
 #define NOTIFY_CVAR_CHANGES true
 #define MAXROUNDS 100
-#define TIMELIMIT 180
+#define TIMELIMIT 0
 #define RESTARGAME_TIME 3
+#define NO_MONEY_UPDATE -1.0
 
 public Plugin:myinfo =
 {
@@ -22,6 +23,9 @@ public Plugin:myinfo =
 };
 
 bool championshipRunning;
+float nextRoundStartMoney;
+bool nextRoundSwitchSides;
+
 int normalRounds;
 int overtimeRounds;
 float normalMoney;
@@ -39,6 +43,9 @@ public OnPluginStart()
 {
     championshipRunning = false;
 
+    nextRoundStartMoney = NO_MONEY_UPDATE;
+    nextRoundSwitchSides = false;
+
     RegConsoleCmd("start_championship", CmdStartChampionship);
     RegConsoleCmd("end_championship", CmdEndChampionship);
 
@@ -46,6 +53,7 @@ public OnPluginStart()
     cvarMaxRounds = FindConVar("mp_maxrounds");
     cvarTimeLimit = FindConVar("mp_timelimit");
 
+    HookEvent("round_start", OnRoundStart);
     HookEvent("round_end", OnRoundEnd);
 }
 
@@ -65,17 +73,21 @@ public Action CmdStartChampionship(int client, int args) {
     }
 
     new String:temp[MAX_ARG_LENGTH];
+
     GetCmdArg(1, temp, sizeof(temp));
     int _normalRounds = StringToInt(temp);
+
     GetCmdArg(2, temp, sizeof(temp));
     int _overtimeRounds = StringToInt(temp);
+
     GetCmdArg(3, temp, sizeof(temp));
     float _normalMoney = StringToFloat(temp);
+
     GetCmdArg(4, temp, sizeof(temp));
     float _overtimeMoney = StringToFloat(temp);
 
-    if (_normalRounds <= 0 || _overtimeRounds <= 0 || _normalRounds % 2 != 0 || _overtimeRounds % 2 != 0) {
-        ReplyToCommand(client, "[SM] Cannot start championship: number of rounds must be a multiple of 2 and bigger than zero!");
+    if (_normalRounds <= 2 || _overtimeRounds <= 2 || _normalRounds % 2 != 0 || _overtimeRounds % 2 != 0) {
+        ReplyToCommand(client, "[SM] Cannot start championship: number of rounds must be a multiple of 2 and bigger than 2!");
         return Plugin_Handled;
     }
 
@@ -85,7 +97,7 @@ public Action CmdStartChampionship(int client, int args) {
     }
 
     ReplyToCommand(client, "[SM] Starting championship with %d normal rounds (start money: %.2f) and %d overtime ones (start money: %.2f). Have fun and good luck!",
-        _normalRounds, _overtimeRounds, _normalMoney, _overtimeMoney);
+        _normalRounds, _normalMoney, _overtimeRounds, _overtimeMoney);
     StartChampionship(_normalRounds, _overtimeRounds, _normalMoney, _overtimeMoney);
 
     return Plugin_Handled;
@@ -128,6 +140,8 @@ void EndChampionship(bool silent) {
     }
 
     championshipRunning = false;
+    nextRoundStartMoney = NO_MONEY_UPDATE;
+    nextRoundSwitchSides = false;
 
     SetConVarInt(cvarMaxRounds, originalMaxRounds, false, NOTIFY_CVAR_CHANGES);
     SetConVarInt(cvarTimeLimit, originalTimeLimit, false, NOTIFY_CVAR_CHANGES);
@@ -140,32 +154,42 @@ void EndWithWinner(int winnerTeam) {
     EndChampionship(false);
 }
 
+public Action OnRoundStart(Event event, const char[] name, bool dontBroadcast) {
+    if (nextRoundStartMoney != NO_MONEY_UPDATE || nextRoundSwitchSides) {
+        UpdatePlayers(nextRoundStartMoney, nextRoundSwitchSides);
+
+        nextRoundStartMoney = NO_MONEY_UPDATE;
+        nextRoundSwitchSides = false;
+    }
+
+    return Plugin_Handled;
+}
+
 public Action OnRoundEnd(Event event, const char[] name, bool dontBroadcast) {
     int ctScore = GetTeamScore(CS_TEAM_CT);
     int tScore = GetTeamScore(CS_TEAM_T);
 
-    if (ctScore + tScore < normalRounds) {
-        // We are normal.
+    if (ctScore + tScore <= normalRounds) {
+        // We are normal time.
         
         // Keep win limit set to NR/2 + 1.
         UpdateWinLimit(normalRounds/2 + 1);
 
-        // If any team is over NR/2points, it's a winner.
+        // If any team is over NR/2 points, it's a winner.
         if (ctScore > normalRounds/2) {
             // CT wins
             EndWithWinner(CS_TEAM_CT);
         } else if (tScore > normalRounds/2) {
             // TR wins
             EndWithWinner(CS_TEAM_T);
-        } else {
-            // Switch sides!
-            UpdatePlayers(normalMoney, true);
+        } else if (ctScore + tScore == normalRounds/2) {
+            // Someone is winning, let's just switch sides!
+            SetNextRoundUpdate(normalMoney, true);
+        } else if (ctScore + tScore == normalRounds && ctScore == tScore) {
+            // It's a tie - let's start overtime!
+            UpdateWinLimit(normalRounds/2 + overtimeRounds/2 + 1);
+            SetNextRoundUpdate(overtimeMoney, false);
         }
-    } else if (ctScore + tScore == normalRounds) {
-        // We are starting overtime!
-
-        UpdateWinLimit(normalRounds/2 + overtimeRounds/2 + 1);
-        UpdatePlayers(overtimeMoney, false);
     } else {
         // We are in overtime!
 
@@ -178,7 +202,7 @@ public Action OnRoundEnd(Event event, const char[] name, bool dontBroadcast) {
         int tOvertimeScore = (tScore - normalRounds/2) % 6;
 
         if (totalOvertimePoints == overtimeRounds/2) {
-            UpdatePlayers(overtimeMoney, true);
+            SetNextRoundUpdate(overtimeMoney, true);
         } else if (ctOvertimeScore >= (overtimeRounds/2) + 1) {
             EndWithWinner(CS_TEAM_CT);
         } else if (tOvertimeScore >= (overtimeRounds/2) + 1) {
@@ -191,6 +215,11 @@ public Action OnRoundEnd(Event event, const char[] name, bool dontBroadcast) {
 
 void UpdateWinLimit(int winLimit) {
     SetConVarInt(cvarWinLimit, winLimit, false, NOTIFY_CVAR_CHANGES);
+}
+
+void SetNextRoundUpdate(float startMoney, bool switchTeams) {
+    nextRoundStartMoney = startMoney;
+    nextRoundSwitchSides = switchTeams;
 }
 
 void UpdatePlayers(float startmoney, bool switchTeams) {
@@ -216,10 +245,12 @@ void UpdatePlayers(float startmoney, bool switchTeams) {
             SetEntProp(client, Prop_Send, "m_ArmorValue", 0);
             SetEntProp(client, Prop_Send, "m_bHasHelmet", 0);
             SetEntProp(client, Prop_Send, "m_bHasDefuser", 0);
-            SetEntProp(client, Prop_Send, "m_iAccount", startmoney);
             
             if (switchTeams) {
                 CS_SwitchTeam(client, (GetClientTeam(client) == 2) ? 3 : 2);
+            }
+            if (startmoney != NO_MONEY_UPDATE) {
+                SetEntProp(client, Prop_Send, "m_iAccount", startmoney);
             }
             CS_RespawnPlayer(client);
         }
