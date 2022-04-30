@@ -3,13 +3,14 @@
 #include <cstrike>
 
 #define PLUGIN_AUTHOR  "rgsilva"
-#define PLUGIN_VERSION "1.3"
+#define PLUGIN_VERSION "1.4"
 #pragma semicolon 1
 
 #define MAX_ARG_LENGTH 32
-#define MAXROUNDS 100
+#define MAXROUNDS 0
 #define TIMELIMIT 0
-#define RESTARGAME_TIME 3
+#define RESTARTGAME_TIME 3
+#define RESETGAME_TIME "2"
 
 #define VERBOSE true
 
@@ -34,13 +35,22 @@ int overtimeMoney;
 Handle cvarWinLimit;
 Handle cvarMaxRounds;
 Handle cvarTimeLimit;
+Handle cvarRestartGame;
 
 int originalWinLimit;
 int originalMaxRounds;
 int originalTimeLimit;
 
+bool backupAvailable;
+int backupClientFrags[MAXPLAYERS];
+int backupClientDeaths[MAXPLAYERS];
+int backupCtScore;
+int backupTrScore;
+
 public OnPluginStart()
 {
+    backupAvailable = false;
+
     championshipRunning = false;
     nextRoundMoney = 0;
     overtimeIndex = 0;
@@ -51,6 +61,7 @@ public OnPluginStart()
     cvarWinLimit = FindConVar("mp_winlimit");
     cvarMaxRounds = FindConVar("mp_maxrounds");
     cvarTimeLimit = FindConVar("mp_timelimit");
+    cvarRestartGame = FindConVar("mp_restartgame");
 
     HookEvent("round_start", OnRoundStart);
     HookEvent("round_end", OnRoundEnd);
@@ -132,7 +143,7 @@ void StartChampionship(int _normalRounds, int _overtimeRounds, int _normalMoney,
     overtimeMoney = _overtimeMoney;
 
     PrintToChatAll("\x03[Championship] A new championship is starting! Have fun everyone, and good luck!");
-    ServerCommand("mp_restartgame %d", RESTARGAME_TIME);
+    ServerCommand("mp_restartgame %d", RESTARTGAME_TIME);
 }
 
 void EndChampionship(bool silent) {
@@ -158,6 +169,10 @@ void EndWithWinner(int winnerTeam) {
 public Action OnRoundStart(Event event, const char[] name, bool dontBroadcast) {
     if (!championshipRunning) {
         return Plugin_Handled;
+    }
+
+    if (backupAvailable) {
+        RestoreScores();
     }
 
     int ctScore = GetTeamScore(CS_TEAM_CT);
@@ -222,7 +237,7 @@ void HandleNormalRoundEnd(int ctScore, int tScore) {
         // NR/2 reached, let's switch sides!
         if (VERBOSE) { PrintToChatAll("\x03[Championship] NR/2 reached"); }
 
-        ResetWeaponsAndSwitchTeams(true);
+        RestartGame(true);
         SetNextRoundMoney(normalMoney);
     } else if (ctScore + tScore == normalRounds && ctScore == tScore) {
         // NR reached and it's a tie - let's start overtime!
@@ -230,7 +245,7 @@ void HandleNormalRoundEnd(int ctScore, int tScore) {
 
         UpdateWinLimit(normalRounds/2 + overtimeRounds/2 + 1);
 
-        ResetWeaponsAndSwitchTeams(false);
+        RestartGame(false);
         SetNextRoundMoney(overtimeMoney);
 
         PrintToChatAll("\x03[Championship] It's a tie! Let's see who wins in the overtime!");
@@ -254,7 +269,7 @@ void HandleOvertimeRoundEnd(int ctScore, int tScore) {
         // OR/2 reached, let's switch sides!
         if (VERBOSE) { PrintToChatAll("\x03[Championship] OR/2 reached, switching sides!"); }
 
-        ResetWeaponsAndSwitchTeams(true);
+        RestartGame(true);
         SetNextRoundMoney(overtimeMoney);
     } else if (ctScore + tScore == overtimeRounds && ctScore == tScore) {
         // OR reached and it's a tie - let's start a new overtime!
@@ -262,7 +277,7 @@ void HandleOvertimeRoundEnd(int ctScore, int tScore) {
 
         UpdateWinLimit(normalRounds/2 + (overtimeRounds/2 * (overtimeIndex+1)) + 1);
 
-        ResetWeaponsAndSwitchTeams(false);
+        RestartGame(false);
         SetNextRoundMoney(overtimeMoney);
     }
 }
@@ -283,46 +298,67 @@ void UpdatePlayersMoney(int money) {
     }
 }
 
-void ResetWeaponsAndSwitchTeams(bool switchTeams) {
+void RestartGame(bool switchTeams) {
     if (switchTeams) {
         PrintToChatAll("\x03[Championship] Switching sides!");
-    }
 
-    // Reset player weapons and switch teams (if required).
-    for (int client = 1; client <= MaxClients; client++) {
-        if (IsClientInGame(client) && GetClientTeam(client) > 1) {
-            ResetWeapons(client);
-
-            if (switchTeams) {
-                CS_SwitchTeam(client, (GetClientTeam(client) == 2) ? 3 : 2);
+        // Switch every client's team.
+        for (int client = 1; client <= MaxClients; client++) {
+            if (IsClientInGame(client) && GetClientTeam(client) > 1) {
+               CS_SwitchTeam(client, (GetClientTeam(client) == 2) ? 3 : 2);
             }
         }
+
+        // Switch the team scores as well.
+        int tmp = CS_GetTeamScore(CS_TEAM_T);
+        CS_SetTeamScore(CS_TEAM_T, CS_GetTeamScore(CS_TEAM_CT));
+        CS_SetTeamScore(CS_TEAM_CT, tmp);
+
+        SetTeamScore(CS_TEAM_T, CS_GetTeamScore(CS_TEAM_T));
+        SetTeamScore(CS_TEAM_CT, CS_GetTeamScore(CS_TEAM_CT));
     }
 
-    // Switch scores as well.
-    if (switchTeams) {
-        int tmp = CS_GetTeamScore(2);
-        CS_SetTeamScore(2, CS_GetTeamScore(3));
-        CS_SetTeamScore(3, tmp);
+    // Backup everyone's scores.
+    BackupScores();
 
-        SetTeamScore(2, CS_GetTeamScore(2));
-        SetTeamScore(3, CS_GetTeamScore(3));
-    }
+    // Trigger a game restart.
+    SetConVarString(cvarRestartGame, RESETGAME_TIME, false, VERBOSE);
 }
 
-void ResetWeapons(int client) {
-    for (int weapon, i = 0; i < 5; i++)
-    {
-        while ((weapon = GetPlayerWeaponSlot(client, i)) != -1)
-        {
-            if (i == 4)
-                CS_DropWeapon(client, weapon, false, true);
-            else
-                RemovePlayerItem(client, weapon);
+void BackupScores() {
+    backupCtScore = CS_GetTeamScore(CS_TEAM_CT);
+    backupTrScore = CS_GetTeamScore(CS_TEAM_T);
+
+    for (int client = 1; client <= MaxClients; client++) {
+        if (IsClientInGame(client) && GetClientTeam(client) > 1) {
+            backupClientFrags[client] = GetEntProp(client, Prop_Data, "m_iFrags");
+            backupClientDeaths[client] = GetEntProp(client, Prop_Data, "m_iDeaths");
+        } else {
+            backupClientFrags[client] = 0;
+            backupClientDeaths[client] = 0;
         }
     }
+
+    backupAvailable = true;
+
+    if (VERBOSE) { PrintToChatAll("\x03[Championship] Scores backup created!"); }
+}
+
+void RestoreScores() {
+    CS_SetTeamScore(CS_TEAM_CT, backupCtScore);
+    SetTeamScore(CS_TEAM_CT, backupCtScore);
     
-    SetEntProp(client, Prop_Send, "m_ArmorValue", 0);
-    SetEntProp(client, Prop_Send, "m_bHasHelmet", 0);
-    SetEntProp(client, Prop_Send, "m_bHasDefuser", 0);
+    CS_SetTeamScore(CS_TEAM_T, backupTrScore);
+    SetTeamScore(CS_TEAM_T, backupTrScore);
+    
+    for (int client = 1; client <= MaxClients; client++) {
+        if (IsClientInGame(client) && GetClientTeam(client) > 1) {
+            SetEntProp(client, Prop_Data, "m_iFrags", backupClientFrags[client]);
+            SetEntProp(client, Prop_Data, "m_iDeaths", backupClientDeaths[client]);
+        }
+    }
+
+    backupAvailable = false;
+
+    if (VERBOSE) { PrintToChatAll("\x03[Championship] Scores backup restored!"); }
 }
