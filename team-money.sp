@@ -4,7 +4,7 @@
 #include <halflife>
 
 #define PLUGIN_AUTHOR	"rgsilva"
-#define PLUGIN_VERSION	"1.1"
+#define PLUGIN_VERSION	"1.2"
 #pragma semicolon 1
 
 #define MAX_BUFFER_SIZE 1024
@@ -40,7 +40,7 @@ public OnConVarChanged(Handle:convar, const String:oldValue[], const String:newV
 
 public void OnRoundStart(Event event, const char[] name, bool dontBroadcast) {
     if (updateTimer != INVALID_HANDLE) {
-        CloseHandle(updateTimer);
+        KillTimer(updateTimer);
     }
 
     if (pluginEnabled) {
@@ -55,7 +55,7 @@ public Action OnTimerTrigger(Handle timer) {
 
 public void OnFreezeEnd(Event event, const char[] name, bool dontBroadcast) {
     if (updateTimer != INVALID_HANDLE) {
-        CloseHandle(updateTimer);
+        KillTimer(updateTimer);
         updateTimer = INVALID_HANDLE;
 
         ClearTeamMoney();
