@@ -3,7 +3,7 @@
 #include <cstrike>
 
 #define PLUGIN_AUTHOR  "rgsilva"
-#define PLUGIN_VERSION "1.5"
+#define PLUGIN_VERSION "1.6"
 #pragma semicolon 1
 
 #define MAX_ARG_LENGTH 64
@@ -14,9 +14,6 @@
 #define RESTARTGAME_TIME "3"
 #define RESETGAME_TIME "2"
 
-#define VERBOSE true
-#define DEBUG true
-
 public Plugin:myinfo =
 {
     name = "Championship",
@@ -26,7 +23,11 @@ public Plugin:myinfo =
     url = "https://github.com/rgsilva/sourcemod-plugins"
 };
 
+
 bool championshipRunning;
+bool nextRoundRestartGame;
+bool nextRoundSwitchTeams;
+
 int overtimeIndex;
 
 int normalRounds;
@@ -40,6 +41,9 @@ Handle cvarTimeLimit;
 Handle cvarRestartGame;
 Handle cvarStartMoney;
 
+Handle cvarVerbose;
+Handle cvarDebug;
+
 int originalMaxRounds;
 int originalTimeLimit;
 int originalStartMoney;
@@ -50,12 +54,21 @@ int backupClientDeaths[MAX_BACKUP_SIZE];
 int backupCtScore;
 int backupTrScore;
 
+bool pluginVerbose;
+bool pluginDebug;
+
 public OnPluginStart()
 {
-    backupAvailable = false;
+    pluginVerbose = true;
+    pluginDebug = false;
+
+    SanityCheck();
 
     championshipRunning = false;
     overtimeIndex = 0;
+    nextRoundRestartGame = false;
+    nextRoundSwitchTeams = false;
+    backupAvailable = false;
 
     RegConsoleCmd("start_championship", CmdStartChampionship);
     RegConsoleCmd("end_championship", CmdEndChampionship);
@@ -66,11 +79,26 @@ public OnPluginStart()
     cvarRestartGame = FindConVar("mp_restartgame");
     cvarStartMoney = FindConVar("mp_startmoney");
 
+    cvarVerbose = CreateConVar("championship_verbose", "1", "Show verbose messages", _, true, 0.0, true, 1.0);
+    HookConVarChange(cvarVerbose, OnConVarChanged);
+    cvarDebug = CreateConVar("championship_debug", "0", "Show debug messages", _, true, 0.0, true, 1.0);
+    HookConVarChange(cvarDebug, OnConVarChanged);
+
     HookEvent("round_start", OnRoundStart);
     HookEvent("round_end", OnRoundEnd);
+}
 
+void SanityCheck() {
     if (MAX_BACKUP_SIZE <= MaxClients || MAX_BACKUP_SIZE <= MAXPLAYERS) {
         ThrowError("WARNING: MAX_BACKUP_SIZE will be reached! This will cause a buffer overflow! MAX_BACKUP_SIZE = %d, MaxClients = %d, MAXPLAYERS = %d!", MAX_BACKUP_SIZE, MaxClients, MAXPLAYERS);
+    }
+}
+
+public OnConVarChanged(Handle:convar, const String:oldValue[], const String:newValue[]) {
+    if (convar == cvarVerbose) {
+        pluginVerbose = GetConVarBool(cvarVerbose);
+    } else if (convar == cvarDebug) {
+        pluginDebug = GetConVarBool(cvarDebug);
     }
 }
 
@@ -138,8 +166,8 @@ void StartChampionship(int _normalRounds, int _overtimeRounds, int _normalMoney,
     originalTimeLimit = GetConVarInt(cvarTimeLimit);
     originalStartMoney = GetConVarInt(cvarStartMoney);
 
-    SetConVarInt(cvarMaxRounds, MAXROUNDS, false, DEBUG);
-    SetConVarInt(cvarTimeLimit, TIMELIMIT, false, DEBUG);
+    SetConVarInt(cvarMaxRounds, MAXROUNDS, false, pluginDebug);
+    SetConVarInt(cvarTimeLimit, TIMELIMIT, false, pluginDebug);
 
     UpdateWinLimit(16);
 
@@ -150,7 +178,7 @@ void StartChampionship(int _normalRounds, int _overtimeRounds, int _normalMoney,
     overtimeMoney = _overtimeMoney;
 
     PrintToChatAll("\x03[Championship] A new championship is starting! Have fun everyone, and good luck!");
-    SetConVarString(cvarRestartGame, RESTARTGAME_TIME, false, DEBUG);
+    SetConVarString(cvarRestartGame, RESTARTGAME_TIME, false, pluginDebug);
 }
 
 void EndChampionship(bool silent) {
@@ -160,10 +188,13 @@ void EndChampionship(bool silent) {
 
     championshipRunning = false;
     overtimeIndex = 0;
+    nextRoundRestartGame = false;
+    nextRoundSwitchTeams = false;
+    backupAvailable = false;
 
-    SetConVarInt(cvarMaxRounds, originalMaxRounds, false, DEBUG);
-    SetConVarInt(cvarTimeLimit, originalTimeLimit, false, DEBUG);
-    SetConVarInt(cvarStartMoney, originalStartMoney, false, DEBUG);
+    SetConVarInt(cvarMaxRounds, originalMaxRounds, false, pluginDebug);
+    SetConVarInt(cvarTimeLimit, originalTimeLimit, false, pluginDebug);
+    SetConVarInt(cvarStartMoney, originalStartMoney, false, pluginDebug);
 }
 
 void EndWithWinner(int winnerTeam) {
@@ -177,18 +208,65 @@ public Action OnRoundStart(Event event, const char[] name, bool dontBroadcast) {
         return Plugin_Handled;
     }
 
+    // Should we switch teams?
+    if (nextRoundSwitchTeams) {
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] nextRoundSwitchTeams is true!"); }
+
+        nextRoundSwitchTeams = false;
+
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Switching team scores"); }
+
+        // Switch the team scores as well.
+        int tmp = CS_GetTeamScore(CS_TEAM_T);
+        CS_SetTeamScore(CS_TEAM_T, CS_GetTeamScore(CS_TEAM_CT));
+        CS_SetTeamScore(CS_TEAM_CT, tmp);
+
+        SetTeamScore(CS_TEAM_T, CS_GetTeamScore(CS_TEAM_T));
+        SetTeamScore(CS_TEAM_CT, CS_GetTeamScore(CS_TEAM_CT));
+
+        // Switch every client's team.
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Switching player teams"); }
+        for (int client = 1; client <= MaxClients; client++) {
+            if (IsClientInGame(client) && GetClientTeam(client) > 1) {
+               CS_SwitchTeam(client, (GetClientTeam(client) == CS_TEAM_T) ? CS_TEAM_CT : CS_TEAM_T);
+            }
+        }
+
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Switch completed!"); }
+    }
+
+    // Should we restart the game?
+    if (nextRoundSwitchTeams || nextRoundRestartGame) {
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] nextRoundSwitchTeams (%d) or nextRoundRestartGame (%d) is true!", nextRoundSwitchTeams, nextRoundRestartGame); }
+
+        nextRoundRestartGame = false;
+
+        // Backup everyone's scores.
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Triggering score backup"); }
+        BackupScores();
+
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Triggering game restart"); }
+        SetConVarString(cvarRestartGame, RESETGAME_TIME, false, pluginDebug);
+
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Exiting OnRoundStart"); }
+
+        return Plugin_Handled;
+    }
+
+    // Restore a backup if available.
     if (backupAvailable) {
         RestoreScores();
     }
 
+    // Standard round stuff!
     int ctScore = GetTeamScore(CS_TEAM_CT);
     int tScore = GetTeamScore(CS_TEAM_T);
 
     if (ctScore + tScore >= normalRounds) {
         overtimeIndex = ((ctScore + tScore - normalRounds) / overtimeRounds) + 1;
-        if (VERBOSE) { PrintToChatAll("\x03[Championship] Overtime (%d) round started.", overtimeIndex); }
+        if (pluginVerbose) { PrintToChatAll("\x03[Championship] Overtime (%d) round started.", overtimeIndex); }
     } else {
-        if (VERBOSE) { PrintToChatAll("\x03[Championship] Normal round started.", overtimeIndex); }
+        if (pluginVerbose) { PrintToChatAll("\x03[Championship] Normal round started.", overtimeIndex); }
     }
 
     return Plugin_Handled;
@@ -204,7 +282,7 @@ public Action OnRoundEnd(Event event, const char[] name, bool dontBroadcast) {
 
     if (ctScore + tScore <= normalRounds) {
         // We are normal time. We can use the direct score values.
-        if (VERBOSE) { PrintToChatAll("\x03[Championship] Normal round finished. CT score: %d, TR score: %d", ctScore, tScore); }
+        if (pluginVerbose) { PrintToChatAll("\x03[Championship] Normal round finished. CT score: %d, TR score: %d", ctScore, tScore); }
         
         HandleNormalRoundEnd(ctScore, tScore);
     } else {
@@ -212,7 +290,7 @@ public Action OnRoundEnd(Event event, const char[] name, bool dontBroadcast) {
         int ctOvertimeScore = ctScore - normalRounds/2 - (overtimeRounds/2 * (overtimeIndex - 1));
         int tOvertimeScore = tScore - normalRounds/2 - (overtimeRounds/2 * (overtimeIndex - 1));
 
-        if (VERBOSE) { PrintToChatAll("\x03[Championship] Overtime (%d) round finished. CT score: %d, TR score: %d", overtimeIndex, ctOvertimeScore, tOvertimeScore); }
+        if (pluginVerbose) { PrintToChatAll("\x03[Championship] Overtime (%d) round finished. CT score: %d, TR score: %d", overtimeIndex, ctOvertimeScore, tOvertimeScore); }
 
         HandleOvertimeRoundEnd(ctOvertimeScore, tOvertimeScore);
     }
@@ -227,23 +305,23 @@ void HandleNormalRoundEnd(int ctScore, int tScore) {
     // If any team is over NR/2 points, it's a winner.
     if (ctScore > normalRounds/2) {
         // CT wins
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] CT wins!"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] CT wins!"); }
 
         EndWithWinner(CS_TEAM_CT);
     } else if (tScore > normalRounds/2) {
         // TR wins
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] TR wins!"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] TR wins!"); }
 
         EndWithWinner(CS_TEAM_T);
     } else if (ctScore + tScore == normalRounds/2) {
         // NR/2 reached, let's switch sides!
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] NR/2 reached"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] NR/2 reached"); }
 
         SetNextRoundMoney(normalMoney);
         RestartGame(true);
     } else if (ctScore + tScore == normalRounds && ctScore == tScore) {
         // NR reached and it's a tie - let's start overtime!
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] NR reached, starting overtime"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] NR reached, starting overtime"); }
 
         UpdateWinLimit(normalRounds/2 + overtimeRounds/2 + 1);
 
@@ -259,23 +337,23 @@ void HandleOvertimeRoundEnd(int ctScore, int tScore) {
 
     if (ctScore > overtimeRounds/2) {
         // CT wins
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] CT wins!"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] CT wins!"); }
 
         EndWithWinner(CS_TEAM_CT);
     } else if (tScore > overtimeRounds/2) {
         // TR wins
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] TR wins!"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] TR wins!"); }
 
         EndWithWinner(CS_TEAM_T);
     } else if (ctScore + tScore == overtimeRounds/2) {
         // OR/2 reached, let's switch sides!
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] OR/2 reached, switching sides!"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] OR/2 reached, switching sides!"); }
 
         SetNextRoundMoney(overtimeMoney);
         RestartGame(true);
     } else if (ctScore + tScore == overtimeRounds && ctScore == tScore) {
         // OR reached and it's a tie - let's start a new overtime!
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] OR reached, starting new overtime!"); }
+        if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] OR reached, starting new overtime!"); }
 
         UpdateWinLimit(normalRounds/2 + (overtimeRounds/2 * (overtimeIndex+1)) + 1);
 
@@ -287,7 +365,7 @@ void HandleOvertimeRoundEnd(int ctScore, int tScore) {
 }
 
 void UpdateWinLimit(int winLimit) {
-    SetConVarInt(cvarWinLimit, winLimit, false, DEBUG);
+    SetConVarInt(cvarWinLimit, winLimit, false, pluginDebug);
 }
 
 void SetNextRoundMoney(int money) {
@@ -295,43 +373,16 @@ void SetNextRoundMoney(int money) {
 }
 
 void RestartGame(bool switchTeams) {
-    if (switchTeams) {
-        PrintToChatAll("\x03[Championship] Switching sides!");
-
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Switching team scores"); }
-
-        // Switch the team scores as well.
-        int tmp = CS_GetTeamScore(CS_TEAM_T);
-        CS_SetTeamScore(CS_TEAM_T, CS_GetTeamScore(CS_TEAM_CT));
-        CS_SetTeamScore(CS_TEAM_CT, tmp);
-
-        SetTeamScore(CS_TEAM_T, CS_GetTeamScore(CS_TEAM_T));
-        SetTeamScore(CS_TEAM_CT, CS_GetTeamScore(CS_TEAM_CT));
-    }
-
-    // Backup everyone's scores.
-    if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Triggering score backup"); }
-    BackupScores();
+    nextRoundRestartGame = true;
+    nextRoundSwitchTeams = switchTeams;
 
     if (switchTeams) {
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Switching player teams"); }
-        // Switch every client's team.
-        for (int client = 1; client <= MaxClients; client++) {
-            if (IsClientInGame(client) && GetClientTeam(client) > 1) {
-               CS_SwitchTeam(client, (GetClientTeam(client) == CS_TEAM_T) ? CS_TEAM_CT : CS_TEAM_T);
-            }
-        }
-
-        if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] "); }
+        PrintToChatAll("\x03[Championship] Switching sides in the next round!");
     }
-
-    // Trigger a game restart.
-    if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Triggering game restart"); }
-    SetConVarString(cvarRestartGame, RESETGAME_TIME, false, DEBUG);
 }
 
 void BackupScores() {
-    if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Creating score backup"); }
+    if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Creating score backup"); }
 
     backupCtScore = CS_GetTeamScore(CS_TEAM_CT);
     backupTrScore = CS_GetTeamScore(CS_TEAM_T);
@@ -348,11 +399,11 @@ void BackupScores() {
 
     backupAvailable = true;
 
-    if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Scores backup created!"); }
+    if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Scores backup created!"); }
 }
 
 void RestoreScores() {
-    if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Restoring score backup"); }
+    if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Restoring score backup"); }
 
     CS_SetTeamScore(CS_TEAM_CT, backupCtScore);
     SetTeamScore(CS_TEAM_CT, backupCtScore);
@@ -369,5 +420,5 @@ void RestoreScores() {
 
     backupAvailable = false;
 
-    if (DEBUG) { PrintToChatAll("\x05[Championship] [DEBUG] Scores backup restored!"); }
+    if (pluginDebug) { PrintToChatAll("\x05[Championship] [DEBUG] Scores backup restored!"); }
 }
